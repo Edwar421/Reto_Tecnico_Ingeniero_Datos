@@ -1,0 +1,801 @@
+main:
+  params: [args]
+
+  steps:
+
+    - inicializar:
+        assign:
+          - project_id: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - bucket_name: ${default(map.get(args, "bucket"), "dwh-reto-dbd")}
+          - object_name: ${default(map.get(args, "object"), "raw/transactions/datos_transacciones.csv")}
+          - execution_id: ${sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+          - start_time: ${sys.now()}
+
+    - registrar_inicio:
+        call: sys.log
+        args:
+          text: '${"Inicio de carga: gs://" + bucket_name + "/" + object_name}'
+          severity: "INFO"
+
+    - registrar_auditoria_inicio:
+        call: googleapis.bigquery.v2.jobs.query
+        args:
+          projectId: "dwh-bdb"
+          body:
+            query: |
+              INSERT INTO `dwh-bdb.bdb_dwh.audit_pipeline`
+              (
+                execution_id,
+                pipeline_name,
+                source_file,
+                start_time,
+                end_time,
+                rows_read,
+                rows_processed,
+                rows_rejected,
+                status,
+                error_message
+              )
+              VALUES (
+                @execution_id,
+                'pipeline_transactions',
+                @source_file,
+                CURRENT_TIMESTAMP(),
+                NULL,
+                0,
+                0,
+                0,
+                'RUNNING',
+                NULL
+              );
+            useLegacySql: false
+            parameterMode: NAMED
+            queryParameters:
+              - name: execution_id
+                parameterType:
+                  type: STRING
+                parameterValue:
+                  value: ${execution_id}
+              - name: source_file
+                parameterType:
+                  type: STRING
+                parameterValue:
+                  value: ${"gs://" + bucket_name + "/" + object_name}
+    
+    - procesar_pipeline:
+        try:
+          steps:
+            - cargar_staging:
+                call: googleapis.bigquery.v2.jobs.insert
+                args:
+                  projectId: ${project_id}
+                  body:
+                    configuration:
+                      load:
+                        sourceUris:
+                          - '${"gs://" + bucket_name + "/" + object_name}'
+                        destinationTable:
+                          projectId: "dwh-bdb"
+                          datasetId: "bdb_dwh"
+                          tableId: "stg_transactions"
+                        sourceFormat: "CSV"
+                        skipLeadingRows: 1
+                        writeDisposition: "WRITE_TRUNCATE"
+                        createDisposition: "CREATE_NEVER"
+                        autodetect: false
+                  connector_params:
+                    timeout: 1800
+                result: load_job
+    
+            - registrar_carga:
+                call: sys.log
+                args:
+                  text: "Archivo cargado correctamente en stg_transactions"
+                  severity: "INFO"
+
+            - limpiar_staging:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.stg_transactions_clean` AS
+                      SELECT
+                        CASE
+                          WHEN TRIM(`tipo de identificación`) IN ('CC', 'CE', 'TI', 'PAS')
+                            THEN TRIM(`tipo de identificación`)
+                          ELSE NULL
+                        END AS tipo_identificacion,
+
+                        SAFE_CAST(`número de identificación` AS STRING) AS numero_identificacion,
+
+                        SAFE_CAST(`número de cuenta` AS STRING) AS numero_cuenta,
+
+                        TRIM(`nombres`) AS nombres,
+
+                        TRIM(`tipo transacción`) AS tipo_transaccion,
+
+                        CASE
+                          WHEN SAFE_CAST(`monto transacción` AS NUMERIC) > 0
+                            THEN SAFE_CAST(`monto transacción` AS NUMERIC)
+                          ELSE NULL
+                        END AS monto_transaccion,
+
+                        TRIM(`tipo de producto`) AS tipo_producto,
+
+                        TRIM(`ciudad`) AS ciudad,
+
+                        CASE
+                          WHEN REGEXP_CONTAINS(`fecha-hora`, r'^\d{10}$')
+                            THEN TIMESTAMP_SECONDS(SAFE_CAST(`fecha-hora` AS INT64))
+                          ELSE SAFE.PARSE_TIMESTAMP('%Y-%m-%d %H:%M:%S', `fecha-hora`)
+                        END AS fecha_hora,
+
+                        SAFE_CAST(`fecha de nacimiento` AS DATE) AS fecha_nacimiento,
+
+                        TRIM(`dirección del cliente`) AS direccion_cliente,
+
+                        SAFE_CAST(`teléfono del cliente` AS STRING) AS telefono_cliente,
+
+                        LOWER(TRIM(`correo del cliente`)) AS correo_cliente,
+
+                        TRIM(`reporte centrales de riesgo`) AS reporte_riesgo,
+
+                        CASE
+                          WHEN SAFE_CAST(`monto reporte de central de riesgo` AS NUMERIC) >= 0
+                            THEN SAFE_CAST(`monto reporte de central de riesgo` AS NUMERIC)
+                          ELSE NULL
+                        END AS monto_riesgo,
+
+                        CASE
+                          WHEN SAFE_CAST(
+                            REGEXP_EXTRACT(
+                              LOWER(TRIM(`tiempo en mora del reporte de riesgo`)),
+                              r'(\d+)'
+                            ) AS INT64
+                          ) >= 0
+                            THEN SAFE_CAST(
+                              REGEXP_EXTRACT(
+                                LOWER(TRIM(`tiempo en mora del reporte de riesgo`)),
+                                r'(\d+)'
+                              ) AS INT64
+                            )
+                          ELSE NULL
+                        END AS tiempo_mora_dias,
+
+                        CURRENT_TIMESTAMP() AS processing_timestamp
+
+                      FROM `dwh-bdb.bdb_dwh.stg_transactions`;
+
+                    useLegacySql: false
+                result: clean_job
+
+            - registrar_limpieza:
+                call: sys.log
+                args:
+                  text: "stg_transactions_clean generado correctamente"
+                  severity: "INFO"
+    
+            - ejecutar_data_quality:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dq_results` (
+                        execution_id STRING,
+                        rule_name STRING,
+                        description STRING,
+                        severity STRING,
+                        checked_rows INT64,
+                        failed_rows INT64,
+                        status STRING,
+                        execution_time TIMESTAMP
+                      );
+
+                      INSERT INTO `dwh-bdb.bdb_dwh.dq_results`
+                      (
+                        execution_id,
+                        rule_name,
+                        description,
+                        severity,
+                        checked_rows,
+                        failed_rows,
+                        status,
+                        execution_time
+                      )
+
+                      WITH base AS (
+                        SELECT
+                          COUNT(*) AS total
+                        FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                      ),
+
+                      reglas AS (
+
+                        SELECT
+                          'DQ_001' AS rule_name,
+                          'Validar que tipo y número de identificación estén informados' AS description,
+                          'CRITICAL' AS severity,
+                          b.total AS checked_rows,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE tipo_identificacion IS NULL
+                               OR numero_identificacion IS NULL
+                               OR TRIM(numero_identificacion) = ''
+                          ) AS failed_rows
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_002',
+                          'Validar catálogo de tipos de identificación',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE tipo_identificacion IS NULL
+                               OR tipo_identificacion NOT IN ('CC', 'CE', 'TI', 'PAS')
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_003',
+                          'Validar que el número de cuenta esté informado',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE numero_cuenta IS NULL
+                               OR TRIM(numero_cuenta) = ''
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_004',
+                          'Validar que el monto de transacción sea mayor que cero',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE monto_transaccion IS NULL
+                               OR monto_transaccion <= 0
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_005',
+                          'Validar que la fecha y hora de la transacción sean válidas',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE fecha_hora IS NULL
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_006',
+                          'Validar que el tipo de transacción esté informado',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE tipo_transaccion IS NULL
+                               OR TRIM(tipo_transaccion) = ''
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_007',
+                          'Validar que el tipo de producto esté informado',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE tipo_producto IS NULL
+                               OR TRIM(tipo_producto) = ''
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_008',
+                          'Validar consistencia de la información de riesgo',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE
+                              (
+                                reporte_riesgo = 'Sí'
+                                AND monto_riesgo IS NULL
+                              )
+                              OR
+                              (
+                                reporte_riesgo = 'No'
+                                AND (
+                                  monto_riesgo IS NOT NULL
+                                  OR tiempo_mora_dias IS NOT NULL
+                                )
+                              )
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_009',
+                          'Validar que no existan transacciones duplicadas',
+                          'CRITICAL',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM (
+                              SELECT
+                                numero_cuenta,
+                                fecha_hora,
+                                monto_transaccion,
+                                tipo_transaccion,
+                                tipo_producto
+                              FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                              GROUP BY
+                                numero_cuenta,
+                                fecha_hora,
+                                monto_transaccion,
+                                tipo_transaccion,
+                                tipo_producto
+                              HAVING COUNT(*) > 1
+                            )
+                          )
+                        FROM base b
+
+                        UNION ALL
+
+                        SELECT
+                          'DQ_010',
+                          'Validar formato del correo electrónico cuando esté informado',
+                          'WARNING',
+                          b.total,
+                          (
+                            SELECT COUNT(*)
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            WHERE correo_cliente IS NOT NULL
+                              AND TRIM(correo_cliente) != ''
+                              AND NOT REGEXP_CONTAINS(
+                                correo_cliente,
+                                r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
+                              )
+                          )
+                        FROM base b
+                      )
+
+                      SELECT
+                        @execution_id AS execution_id,
+                        rule_name,
+                        description,
+                        severity,
+                        checked_rows,
+                        failed_rows,
+
+                        CASE
+                          WHEN failed_rows = 0 THEN 'PASS'
+                          WHEN severity = 'WARNING' THEN 'WARNING'
+                          ELSE 'FAIL'
+                        END AS status,
+
+                        CURRENT_TIMESTAMP()
+
+                      FROM reglas;
+
+                      SELECT 'Data Quality ejecutado correctamente' AS mensaje;
+
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    queryParameters:
+                      - name: execution_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${execution_id}
+                result: dq_job
+    
+            - ejecutar_quality_gate:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      CREATE TABLE IF NOT EXISTS `dwh-bdb.bdb_dwh.quality_gate`
+                      (
+                        execution_id STRING,
+                        critical_failures INT64,
+                        warnings INT64,
+                        decision STRING,
+                        execution_time TIMESTAMP
+                      );
+
+                      INSERT INTO `dwh-bdb.bdb_dwh.quality_gate`
+                      (
+                        execution_id,
+                        critical_failures,
+                        warnings,
+                        decision,
+                        execution_time
+                      )
+
+                      SELECT
+                        dq.execution_id,
+
+                        COUNTIF(
+                          dq.severity = 'CRITICAL'
+                          AND dq.status = 'FAIL'
+                        ) AS critical_failures,
+
+                        COUNTIF(
+                          dq.status = 'WARNING'
+                        ) AS warnings,
+
+                        CASE
+                          WHEN COUNTIF(
+                            dq.severity = 'CRITICAL'
+                            AND dq.status = 'FAIL'
+                          ) = 0
+                          THEN 'ALLOW'
+                          ELSE 'BLOCK'
+                        END AS decision,
+
+                        CURRENT_TIMESTAMP() AS execution_time
+
+                      FROM `dwh-bdb.bdb_dwh.dq_results` dq
+                      WHERE dq.execution_id = @execution_id
+                      GROUP BY dq.execution_id;
+
+                      SELECT
+                        decision
+                      FROM `dwh-bdb.bdb_dwh.quality_gate`
+                      WHERE execution_id = @execution_id
+                      ORDER BY execution_time DESC
+                      LIMIT 1;
+
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    queryParameters:
+                      - name: execution_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${execution_id}
+                result: gate_job
+
+            - registrar_quality_gate:
+                call: sys.log
+                args:
+                  text: "Data Quality y Quality Gate ejecutados correctamente"
+                  severity: "INFO"
+
+            - evaluar_quality_gate:
+                switch:
+                  - condition: ${gate_job.rows[0].f[0].v == "ALLOW"}
+                    next: cargar_dwh
+
+                  - condition: ${gate_job.rows[0].f[0].v == "BLOCK"}
+                    next: registrar_bloqueo
+
+                  - condition: true
+                    next: registrar_bloqueo
+
+            - cargar_dwh:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+              
+                      -- Dimensión cliente
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_cliente` AS
+                      SELECT
+                        ROW_NUMBER() OVER (
+                          ORDER BY numero_identificacion
+                        ) AS id_cliente,
+                        numero_identificacion,
+                        tipo_identificacion,
+                        nombres,
+                        ciudad,
+                        fecha_nacimiento,
+                        direccion_cliente,
+                        telefono_cliente,
+                        correo_cliente
+                      FROM (
+                        SELECT DISTINCT
+                          numero_identificacion,
+                          tipo_identificacion,
+                          nombres,
+                          ciudad,
+                          fecha_nacimiento,
+                          direccion_cliente,
+                          telefono_cliente,
+                          correo_cliente
+                        FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                        WHERE numero_identificacion IS NOT NULL
+                      );
+
+                      -- Dimensión producto
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_producto` AS
+                      SELECT
+                        ROW_NUMBER() OVER (
+                          ORDER BY tipo_producto
+                        ) AS id_producto,
+                        tipo_producto
+                      FROM (
+                        SELECT DISTINCT
+                          tipo_producto
+                        FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                        WHERE tipo_producto IS NOT NULL
+                      );
+
+                      -- Dimensión riesgo
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_riesgo` AS
+                      SELECT
+                        ROW_NUMBER() OVER (
+                          ORDER BY
+                            reporte_riesgo,
+                            monto_riesgo,
+                            tiempo_mora_dias
+                        ) AS id_riesgo,
+                        reporte_riesgo,
+                        monto_riesgo,
+                        tiempo_mora_dias
+                      FROM (
+                        SELECT DISTINCT
+                          reporte_riesgo,
+                          monto_riesgo,
+                          tiempo_mora_dias
+                        FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                        WHERE reporte_riesgo IS NOT NULL
+                      );
+
+                      -- Dimensión fecha
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_fecha` AS
+                      SELECT
+                        CAST(
+                          FORMAT_DATE('%Y%m%d', fecha)
+                          AS INT64
+                        ) AS id_fecha,
+                        fecha,
+                        EXTRACT(DAY FROM fecha) AS dia,
+                        EXTRACT(MONTH FROM fecha) AS mes,
+                        EXTRACT(YEAR FROM fecha) AS anio,
+                        EXTRACT(QUARTER FROM fecha) AS trimestre
+                      FROM UNNEST(
+                        GENERATE_DATE_ARRAY(
+                          (
+                            SELECT MIN(DATE(fecha_hora))
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                          ),
+                          (
+                            SELECT MAX(DATE(fecha_hora))
+                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                          )
+                        )
+                      ) AS fecha;
+
+                      -- Tabla de hechos
+                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.fact_transacciones`
+                      PARTITION BY DATE(fecha_hora)
+                      CLUSTER BY id_cliente, id_producto
+                      AS
+                      SELECT
+                        TO_HEX(
+                          SHA256(
+                            CONCAT(
+                              CAST(st.numero_cuenta AS STRING),
+                              '|',
+                              CAST(st.fecha_hora AS STRING),
+                              '|',
+                              CAST(st.monto_transaccion AS STRING),
+                              '|',
+                              st.tipo_transaccion,
+                              '|',
+                              st.tipo_producto
+                            )
+                          )
+                        ) AS id_transaccion,
+
+                        dc.id_cliente,
+                        dp.id_producto,
+                        df.id_fecha,
+                        dr.id_riesgo,
+
+                        st.numero_cuenta,
+                        st.fecha_hora,
+                        st.monto_transaccion,
+                        st.tipo_transaccion
+
+                      FROM `dwh-bdb.bdb_dwh.stg_transactions_clean` AS st
+
+                      INNER JOIN `dwh-bdb.bdb_dwh.dim_cliente` AS dc
+                        ON st.numero_identificacion = dc.numero_identificacion
+
+                      INNER JOIN `dwh-bdb.bdb_dwh.dim_producto` AS dp
+                        ON st.tipo_producto = dp.tipo_producto
+
+                      INNER JOIN `dwh-bdb.bdb_dwh.dim_riesgo` AS dr
+                        ON st.reporte_riesgo = dr.reporte_riesgo
+                        AND COALESCE(st.monto_riesgo, -1)
+                            = COALESCE(dr.monto_riesgo, -1)
+                        AND COALESCE(st.tiempo_mora_dias, -1)
+                            = COALESCE(dr.tiempo_mora_dias, -1)
+
+                      INNER JOIN `dwh-bdb.bdb_dwh.dim_fecha` AS df
+                        ON DATE(st.fecha_hora) = df.fecha;
+
+                      SELECT
+                        (SELECT COUNT(*)
+                         FROM `dwh-bdb.bdb_dwh.dim_cliente`) AS clientes,
+                        (SELECT COUNT(*)
+                         FROM `dwh-bdb.bdb_dwh.dim_producto`) AS productos,
+                        (SELECT COUNT(*)
+                         FROM `dwh-bdb.bdb_dwh.dim_riesgo`) AS riesgos,
+                        (SELECT COUNT(*)
+                         FROM `dwh-bdb.bdb_dwh.dim_fecha`) AS fechas,
+                        (SELECT COUNT(*)
+                         FROM `dwh-bdb.bdb_dwh.fact_transacciones`) AS transacciones;
+
+                    useLegacySql: false
+                result: dwh_job
+
+            - registrar_dwh:
+                call: sys.log
+                args:
+                  text: "Quality Gate ALLOW. Dimensiones y fact_transacciones cargadas correctamente."
+                  severity: "INFO"
+
+                next: registrar_auditoria_exito
+
+            - registrar_bloqueo:
+                call: sys.log
+                args:
+                  text: "Quality Gate en BLOCK. La carga al DWH fue detenida."
+                  severity: "ERROR"
+
+                next: registrar_auditoria_bloqueo
+
+            - finalizar_bloqueado:
+                return:
+                  status: "BLOCKED"
+                  table: "dwh-bdb.bdb_dwh.stg_transactions"
+                  source: '${"gs://" + bucket_name + "/" + object_name}'
+
+    
+            - registrar_auditoria_exito:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      UPDATE `dwh-bdb.bdb_dwh.audit_pipeline`
+                      SET
+                        end_time = CURRENT_TIMESTAMP(),
+                        rows_read = (
+                          SELECT COUNT(*)
+                          FROM `dwh-bdb.bdb_dwh.stg_transactions`
+                        ),
+                        rows_processed = (
+                          SELECT COUNT(*)
+                          FROM `dwh-bdb.bdb_dwh.fact_transacciones`
+                        ),
+                        rows_rejected = 0,
+                        status = 'SUCCESS',
+                        error_message = NULL
+                      WHERE execution_id = @execution_id;
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    queryParameters:
+                      - name: execution_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${execution_id}
+                next: finalizar
+
+            - registrar_auditoria_bloqueo:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      UPDATE `dwh-bdb.bdb_dwh.audit_pipeline`
+                      SET
+                        end_time = CURRENT_TIMESTAMP(),
+                        rows_read = (
+                          SELECT COUNT(*)
+                          FROM `dwh-bdb.bdb_dwh.stg_transactions`
+                        ),
+                        rows_processed = 0,
+                        rows_rejected = (
+                          SELECT COALESCE(SUM(failed_rows), 0)
+                          FROM `dwh-bdb.bdb_dwh.dq_results`
+                          WHERE execution_id = @execution_id
+                        ),
+                        status = 'BLOCKED',
+                        error_message = 'Quality Gate bloqueó la carga al DWH'
+                      WHERE execution_id = @execution_id;
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    queryParameters:
+                      - name: execution_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${execution_id}
+                next: finalizar_bloqueado
+
+            - finalizar:
+                return:
+                  status: "SUCCESS"
+                  table: "dwh-bdb.bdb_dwh.stg_transactions"
+                  source: '${"gs://" + bucket_name + "/" + object_name}'
+        except:
+          as: e
+          steps:
+            - registrar_auditoria_error:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: "dwh-bdb"
+                  body:
+                    query: |
+                      UPDATE `dwh-bdb.bdb_dwh.audit_pipeline`
+                      SET
+                        end_time = CURRENT_TIMESTAMP(),
+                        rows_read = 0,
+                        rows_processed = 0,
+                        rows_rejected = 0,
+                        status = 'FAILED',
+                        error_message = @error_message
+                      WHERE execution_id = @execution_id;
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    queryParameters:
+                      - name: execution_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${execution_id}
+                      - name: error_message
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${e.message}
+            - registrar_log_error:
+                call: sys.log
+                args:
+                  data:
+                    pipeline_name: "pipeline_transactions"
+                    execution_id: ${execution_id}
+                    source_file: '${"gs://" + bucket_name + "/" + object_name}'
+                    status: "FAILED"
+                    error_message: ${e.message}
+                  severity: "ERROR"
+            - relanzar_error:
+                raise: ${e}

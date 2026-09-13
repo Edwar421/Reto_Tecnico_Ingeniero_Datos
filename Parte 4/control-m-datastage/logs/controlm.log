@@ -1,0 +1,196 @@
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: s b 12/09/2026 23:14:16,94 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano del archivo: 452 bytes 
+JOB_01 OK 
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: s b 12/09/2026 23:14:22,96 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano del archivo: 452 bytes 
+JOB_01 OK 
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: s b 12/09/2026 23:16:02,71 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano del archivo: 452 bytes 
+JOB_01 OK 
+====================================== 
+CONTROL-M - INICIO DE EJECUCION 
+Fecha: dom 13/09/2026  0:21:36,51 
+====================================== 
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: dom 13/09/2026  0:21:36,52 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano del archivo: 452 bytes 
+JOB_01 OK 
+====================================== 
+JOB_02 - EJECUCION DATASTAGE 
+Fecha: dom 13/09/2026  0:21:36,60 
+====================================== 
+DataStage: IBM Cloud Pak for Data 
+Flujo: DS_CLIENTES_TRANS 
+Ejecucion: Realizada en IBM DataStage 
+Ejecucion DataStage registrada 
+JOB_02 OK 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  0:21:36,67 
+====================================== 
+OK: Archivo de salida encontrado 
+OK: Tamano: 564 bytes 
+JOB_03 OK 
+====================================== 
+JOB_04 - ARCHIVAR INPUT 
+Fecha: dom 13/09/2026  0:21:36,73 
+====================================== 
+OK: Archivo archivado 
+JOB_04 OK 
+CONTROL-M - EJECUCION EXITOSA 
+Fecha fin: dom 13/09/2026  0:21:36,79 
+====================================== 
+CONTROL-M - INICIO DE EJECUCION 
+Fecha: dom 13/09/2026  0:28:53,74 
+====================================== 
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: dom 13/09/2026  0:28:53,78 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano: 452 bytes 
+OK: Tamano valido 
+====================================== 
+CONTROL-M - INICIO DE EJECUCION 
+Fecha: dom 13/09/2026  0:29:59,54 
+====================================== 
+====================================== 
+JOB_01 - VALIDACION DE INPUT 
+Fecha: dom 13/09/2026  0:29:59,57 
+====================================== 
+OK: Archivo encontrado 
+OK: Tamano del archivo: 452 bytes 
+JOB_01 OK 
+====================================== 
+JOB_02 - EJECUCION DATASTAGE 
+Fecha: dom 13/09/2026  0:29:59,63 
+====================================== 
+DataStage: IBM Cloud Pak for Data 
+Flujo: DS_CLIENTES_TRANS 
+Ejecucion: Realizada en IBM DataStage 
+Ejecucion DataStage registrada 
+JOB_02 OK 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  0:29:59,71 
+====================================== 
+OK: Archivo de salida encontrado 
+OK: Tamano: 564 bytes 
+JOB_03 OK 
+====================================== 
+JOB_04 - ARCHIVAR INPUT 
+Fecha: dom 13/09/2026  0:29:59,78 
+====================================== 
+OK: Archivo archivado 
+JOB_04 OK 
+CONTROL-M - EJECUCION EXITOSA 
+Fecha fin: dom 13/09/2026  0:29:59,82 
+====================================== 
+CONTROL-M - INICIO DE EJECUCION 
+Fecha: dom 13/09/2026  1:08:22,19 
+====================================== 
+JOB_04_MOVER_ARCHIVO - Intento 1/3 
+====================================== 
+JOB_04 - ARCHIVAR INPUT 
+Fecha: dom 13/09/2026  1:08:22,24 
+====================================== 
+OK: Archivo archivado 
+JOB_04 OK 
+JOB_04_MOVER_ARCHIVO - EJECUCION EXITOSA 
+CONTROL-M - EJECUCION EXITOSA 
+Fecha fin: dom 13/09/2026  1:08:22,29 
+JOB_02_EJECUTAR_DATASTAGE - Intento 1/3 
+====================================== 
+JOB_02 - EJECUCION DATASTAGE 
+Fecha: dom 13/09/2026  1:08:22,33 
+====================================== 
+DataStage: IBM Cloud Pak for Data 
+Flujo: DS_CLIENTES_TRANS 
+Ejecucion: Realizada en IBM DataStage 
+Ejecucion DataStage registrada 
+JOB_02 OK 
+JOB_02_EJECUTAR_DATASTAGE - EJECUCION EXITOSA 
+JOB_03_VALIDAR_OUTPUT - Intento 1/3 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  1:08:22,43 
+====================================== 
+OK: Archivo de salida encontrado 
+OK: Tamano: 564 bytes 
+JOB_03 OK 
+JOB_03_VALIDAR_OUTPUT - EJECUCION EXITOSA 
+JOB_04_MOVER_ARCHIVO - Intento 1/3 
+====================================== 
+JOB_04 - ARCHIVAR INPUT 
+Fecha: dom 13/09/2026  1:08:22,51 
+====================================== 
+OK: Archivo archivado 
+JOB_04 OK 
+JOB_04_MOVER_ARCHIVO - EJECUCION EXITOSA 
+CONTROL-M - EJECUCION EXITOSA 
+Fecha fin: dom 13/09/2026  1:08:22,55 
+====================================== 
+CONTROL-M - INICIO DE EJECUCION 
+Fecha: dom 13/09/2026  1:09:04,63 
+====================================== 
+JOB_04_MOVER_ARCHIVO - Intento 1/3 
+====================================== 
+JOB_04 - ARCHIVAR INPUT 
+Fecha: dom 13/09/2026  1:09:04,68 
+====================================== 
+OK: Archivo archivado 
+JOB_04 OK 
+JOB_04_MOVER_ARCHIVO - EJECUCION EXITOSA 
+CONTROL-M - EJECUCION EXITOSA 
+Fecha fin: dom 13/09/2026  1:09:04,73 
+JOB_02_EJECUTAR_DATASTAGE - Intento 1/3 
+====================================== 
+JOB_02 - EJECUCION DATASTAGE 
+Fecha: dom 13/09/2026  1:09:04,76 
+====================================== 
+DataStage: IBM Cloud Pak for Data 
+Flujo: DS_CLIENTES_TRANS 
+Ejecucion: Realizada en IBM DataStage 
+Ejecucion DataStage registrada 
+JOB_02 OK 
+JOB_02_EJECUTAR_DATASTAGE - EJECUCION EXITOSA 
+JOB_03_VALIDAR_OUTPUT - Intento 1/3 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  1:09:04,86 
+====================================== 
+ERROR: No existe clientes_output.csv 
+JOB_03_VALIDAR_OUTPUT - ERROR en intento 1 
+JOB_03_VALIDAR_OUTPUT - Esperando 5 segundos para reintento 
+JOB_03_VALIDAR_OUTPUT - Intento 2/3 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  1:09:09,20 
+====================================== 
+ERROR: No existe clientes_output.csv 
+JOB_03_VALIDAR_OUTPUT - ERROR en intento 2 
+JOB_03_VALIDAR_OUTPUT - Esperando 5 segundos para reintento 
+JOB_03_VALIDAR_OUTPUT - Intento 3/3 
+====================================== 
+JOB_03 - VALIDACION DE OUTPUT 
+Fecha: dom 13/09/2026  1:09:14,21 
+====================================== 
+ERROR: No existe clientes_output.csv 
+JOB_03_VALIDAR_OUTPUT - ERROR en intento 3 
+ALERTA: JOB_03_VALIDAR_OUTPUT - Reintentos agotados 
+JOB_03_VALIDAR_OUTPUT - EJECUCION FALLIDA 
