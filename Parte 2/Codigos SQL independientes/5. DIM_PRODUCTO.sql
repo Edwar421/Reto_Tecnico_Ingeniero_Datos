@@ -1,9 +1,6 @@
 CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_producto` AS
 SELECT
-  ROW_NUMBER() OVER (
-    ORDER BY tipo_producto
-  ) AS id_producto,
-
+  RFARM_FINGERPRINT(tipo_producto) AS id_producto,
   tipo_producto
 
 FROM (

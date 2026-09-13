@@ -1,12 +1,14 @@
 CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_riesgo` AS
 SELECT
-  ROW_NUMBER() OVER (
-    ORDER BY
-      reporte_riesgo,
-      monto_riesgo,
-      tiempo_mora_dias
+  FARM_FINGERPRINT(
+    CONCAT(
+      COALESCE(reporte_riesgo, ''),
+      '|',
+      CAST(COALESCE(monto_riesgo, -1) AS STRING),
+      '|',
+      CAST(COALESCE(tiempo_mora_dias, -1) AS STRING)
+    )
   ) AS id_riesgo,
-
   reporte_riesgo,
   monto_riesgo,
   tiempo_mora_dias

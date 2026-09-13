@@ -515,9 +515,7 @@ main:
                       -- Dimensión cliente
                       CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_cliente` AS
                       SELECT
-                        ROW_NUMBER() OVER (
-                          ORDER BY numero_identificacion
-                        ) AS id_cliente,
+                        FARM_FINGERPRINT(numero_identificacion) AS id_cliente,
                         numero_identificacion,
                         tipo_identificacion,
                         nombres,
@@ -543,9 +541,7 @@ main:
                       -- Dimensión producto
                       CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_producto` AS
                       SELECT
-                        ROW_NUMBER() OVER (
-                          ORDER BY tipo_producto
-                        ) AS id_producto,
+                        FARM_FINGERPRINT(tipo_producto) AS id_producto,
                         tipo_producto
                       FROM (
                         SELECT DISTINCT
@@ -557,11 +553,14 @@ main:
                       -- Dimensión riesgo
                       CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_riesgo` AS
                       SELECT
-                        ROW_NUMBER() OVER (
-                          ORDER BY
-                            reporte_riesgo,
-                            monto_riesgo,
-                            tiempo_mora_dias
+                        FARM_FINGERPRINT(
+                            CONCAT(
+                            COALESCE(reporte_riesgo, ''),
+                            '|',
+                            CAST(COALESCE(monto_riesgo, -1) AS STRING),
+                            '|',
+                            CAST(COALESCE(tiempo_mora_dias, -1) AS STRING)
+                            )
                         ) AS id_riesgo,
                         reporte_riesgo,
                         monto_riesgo,

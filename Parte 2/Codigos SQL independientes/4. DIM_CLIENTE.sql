@@ -1,9 +1,6 @@
 CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_cliente` AS
 SELECT
-  ROW_NUMBER() OVER (
-    ORDER BY numero_identificacion
-  ) AS id_cliente,
-
+  FARM_FINGERPRINT(numero_identificacion) AS id_cliente,
   numero_identificacion,
   tipo_identificacion,
   nombres,
