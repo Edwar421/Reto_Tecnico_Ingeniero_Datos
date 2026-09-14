@@ -512,20 +512,15 @@ main:
                   body:
                     query: |
               
+                      -- Carga incremental de dimensiones y hechos
+                      -- Se conserva la información existente y se incorporan/actualizan
+                      -- únicamente los registros del nuevo lote.
+
                       -- Dimensión cliente
-                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_cliente` AS
-                      SELECT
-                        FARM_FINGERPRINT(numero_identificacion) AS id_cliente,
-                        numero_identificacion,
-                        tipo_identificacion,
-                        nombres,
-                        ciudad,
-                        fecha_nacimiento,
-                        direccion_cliente,
-                        telefono_cliente,
-                        correo_cliente
-                      FROM (
-                        SELECT DISTINCT
+                      MERGE `dwh-bdb.bdb_dwh.dim_cliente` AS target
+                      USING (
+                        SELECT
+                          FARM_FINGERPRINT(numero_identificacion) AS id_cliente,
                           numero_identificacion,
                           tipo_identificacion,
                           nombres,
@@ -536,130 +531,223 @@ main:
                           correo_cliente
                         FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
                         WHERE numero_identificacion IS NOT NULL
-                      );
+                        QUALIFY ROW_NUMBER() OVER (
+                          PARTITION BY numero_identificacion
+                          ORDER BY processing_timestamp DESC
+                        ) = 1
+                      ) AS source
+                      ON target.numero_identificacion = source.numero_identificacion
+                      WHEN MATCHED THEN
+                        UPDATE SET
+                          tipo_identificacion = source.tipo_identificacion,
+                          nombres = source.nombres,
+                          ciudad = source.ciudad,
+                          fecha_nacimiento = source.fecha_nacimiento,
+                          direccion_cliente = source.direccion_cliente,
+                          telefono_cliente = source.telefono_cliente,
+                          correo_cliente = source.correo_cliente
+                      WHEN NOT MATCHED THEN
+                        INSERT (
+                          id_cliente,
+                          numero_identificacion,
+                          tipo_identificacion,
+                          nombres,
+                          ciudad,
+                          fecha_nacimiento,
+                          direccion_cliente,
+                          telefono_cliente,
+                          correo_cliente
+                        )
+                        VALUES (
+                          source.id_cliente,
+                          source.numero_identificacion,
+                          source.tipo_identificacion,
+                          source.nombres,
+                          source.ciudad,
+                          source.fecha_nacimiento,
+                          source.direccion_cliente,
+                          source.telefono_cliente,
+                          source.correo_cliente
+                        );
 
                       -- Dimensión producto
-                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_producto` AS
-                      SELECT
-                        FARM_FINGERPRINT(tipo_producto) AS id_producto,
-                        tipo_producto
-                      FROM (
+                      MERGE `dwh-bdb.bdb_dwh.dim_producto` AS target
+                      USING (
                         SELECT DISTINCT
+                          FARM_FINGERPRINT(tipo_producto) AS id_producto,
                           tipo_producto
                         FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
                         WHERE tipo_producto IS NOT NULL
-                      );
+                      ) AS source
+                      ON target.tipo_producto = source.tipo_producto
+                      WHEN NOT MATCHED THEN
+                        INSERT (
+                          id_producto,
+                          tipo_producto
+                        )
+                        VALUES (
+                          source.id_producto,
+                          source.tipo_producto
+                        );
 
                       -- Dimensión riesgo
-                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_riesgo` AS
-                      SELECT
-                        FARM_FINGERPRINT(
-                            CONCAT(
-                            COALESCE(reporte_riesgo, ''),
-                            '|',
-                            CAST(COALESCE(monto_riesgo, -1) AS STRING),
-                            '|',
-                            CAST(COALESCE(tiempo_mora_dias, -1) AS STRING)
-                            )
-                        ) AS id_riesgo,
-                        reporte_riesgo,
-                        monto_riesgo,
-                        tiempo_mora_dias
-                      FROM (
+                      MERGE `dwh-bdb.bdb_dwh.dim_riesgo` AS target
+                      USING (
                         SELECT DISTINCT
+                          FARM_FINGERPRINT(
+                            CONCAT(
+                              COALESCE(reporte_riesgo, ''),
+                              '|',
+                              CAST(COALESCE(monto_riesgo, -1) AS STRING),
+                              '|',
+                              CAST(COALESCE(tiempo_mora_dias, -1) AS STRING)
+                            )
+                          ) AS id_riesgo,
                           reporte_riesgo,
                           monto_riesgo,
                           tiempo_mora_dias
                         FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
                         WHERE reporte_riesgo IS NOT NULL
-                      );
+                      ) AS source
+                      ON target.reporte_riesgo = source.reporte_riesgo
+                        AND COALESCE(target.monto_riesgo, -1) = COALESCE(source.monto_riesgo, -1)
+                        AND COALESCE(target.tiempo_mora_dias, -1) = COALESCE(source.tiempo_mora_dias, -1)
+                      WHEN NOT MATCHED THEN
+                        INSERT (
+                          id_riesgo,
+                          reporte_riesgo,
+                          monto_riesgo,
+                          tiempo_mora_dias
+                        )
+                        VALUES (
+                          source.id_riesgo,
+                          source.reporte_riesgo,
+                          source.monto_riesgo,
+                          source.tiempo_mora_dias
+                        );
 
                       -- Dimensión fecha
-                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.dim_fecha` AS
-                      SELECT
-                        CAST(
-                          FORMAT_DATE('%Y%m%d', fecha)
-                          AS INT64
-                        ) AS id_fecha,
-                        fecha,
-                        EXTRACT(DAY FROM fecha) AS dia,
-                        EXTRACT(MONTH FROM fecha) AS mes,
-                        EXTRACT(YEAR FROM fecha) AS anio,
-                        EXTRACT(QUARTER FROM fecha) AS trimestre
-                      FROM UNNEST(
-                        GENERATE_DATE_ARRAY(
-                          (
-                            SELECT MIN(DATE(fecha_hora))
-                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
-                          ),
-                          (
-                            SELECT MAX(DATE(fecha_hora))
-                            FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
-                          )
-                        )
-                      ) AS fecha;
-
-                      -- Tabla de hechos
-                      CREATE OR REPLACE TABLE `dwh-bdb.bdb_dwh.fact_transacciones`
-                      PARTITION BY DATE(fecha_hora)
-                      CLUSTER BY id_cliente, id_producto
-                      AS
-                      SELECT
-                        TO_HEX(
-                          SHA256(
-                            CONCAT(
-                              CAST(st.numero_cuenta AS STRING),
-                              '|',
-                              CAST(st.fecha_hora AS STRING),
-                              '|',
-                              CAST(st.monto_transaccion AS STRING),
-                              '|',
-                              st.tipo_transaccion,
-                              '|',
-                              st.tipo_producto
+                      MERGE `dwh-bdb.bdb_dwh.dim_fecha` AS target
+                      USING (
+                        SELECT
+                          CAST(FORMAT_DATE('%Y%m%d', fecha) AS INT64) AS id_fecha,
+                          fecha,
+                          EXTRACT(DAY FROM fecha) AS dia,
+                          EXTRACT(MONTH FROM fecha) AS mes,
+                          EXTRACT(YEAR FROM fecha) AS anio,
+                          EXTRACT(QUARTER FROM fecha) AS trimestre
+                        FROM UNNEST(
+                          GENERATE_DATE_ARRAY(
+                            (
+                              SELECT MIN(DATE(fecha_hora))
+                              FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
+                            ),
+                            (
+                              SELECT MAX(DATE(fecha_hora))
+                              FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
                             )
                           )
-                        ) AS id_transaccion,
+                        ) AS fecha
+                      ) AS source
+                      ON target.fecha = source.fecha
+                      WHEN NOT MATCHED THEN
+                        INSERT (
+                          id_fecha,
+                          fecha,
+                          dia,
+                          mes,
+                          anio,
+                          trimestre
+                        )
+                        VALUES (
+                          source.id_fecha,
+                          source.fecha,
+                          source.dia,
+                          source.mes,
+                          source.anio,
+                          source.trimestre
+                        );
 
-                        dc.id_cliente,
-                        dp.id_producto,
-                        df.id_fecha,
-                        dr.id_riesgo,
-
-                        st.numero_cuenta,
-                        st.fecha_hora,
-                        st.monto_transaccion,
-                        st.tipo_transaccion
-
-                      FROM `dwh-bdb.bdb_dwh.stg_transactions_clean` AS st
-
-                      INNER JOIN `dwh-bdb.bdb_dwh.dim_cliente` AS dc
-                        ON st.numero_identificacion = dc.numero_identificacion
-
-                      INNER JOIN `dwh-bdb.bdb_dwh.dim_producto` AS dp
-                        ON st.tipo_producto = dp.tipo_producto
-
-                      INNER JOIN `dwh-bdb.bdb_dwh.dim_riesgo` AS dr
-                        ON st.reporte_riesgo = dr.reporte_riesgo
-                        AND COALESCE(st.monto_riesgo, -1)
-                            = COALESCE(dr.monto_riesgo, -1)
-                        AND COALESCE(st.tiempo_mora_dias, -1)
-                            = COALESCE(dr.tiempo_mora_dias, -1)
-
-                      INNER JOIN `dwh-bdb.bdb_dwh.dim_fecha` AS df
-                        ON DATE(st.fecha_hora) = df.fecha;
+                      -- Tabla de hechos: inserta nuevas transacciones y actualiza existentes.
+                      MERGE `dwh-bdb.bdb_dwh.fact_transacciones` AS target
+                      USING (
+                        SELECT
+                          TO_HEX(
+                            SHA256(
+                              CONCAT(
+                                CAST(st.numero_cuenta AS STRING),
+                                '|',
+                                CAST(st.fecha_hora AS STRING),
+                                '|',
+                                CAST(st.monto_transaccion AS STRING),
+                                '|',
+                                st.tipo_transaccion,
+                                '|',
+                                st.tipo_producto
+                              )
+                            )
+                          ) AS id_transaccion,
+                          dc.id_cliente,
+                          dp.id_producto,
+                          df.id_fecha,
+                          dr.id_riesgo,
+                          st.numero_cuenta,
+                          st.fecha_hora,
+                          st.monto_transaccion,
+                          st.tipo_transaccion
+                        FROM `dwh-bdb.bdb_dwh.stg_transactions_clean` AS st
+                        INNER JOIN `dwh-bdb.bdb_dwh.dim_cliente` AS dc
+                          ON st.numero_identificacion = dc.numero_identificacion
+                        INNER JOIN `dwh-bdb.bdb_dwh.dim_producto` AS dp
+                          ON st.tipo_producto = dp.tipo_producto
+                        INNER JOIN `dwh-bdb.bdb_dwh.dim_riesgo` AS dr
+                          ON st.reporte_riesgo = dr.reporte_riesgo
+                          AND COALESCE(st.monto_riesgo, -1) = COALESCE(dr.monto_riesgo, -1)
+                          AND COALESCE(st.tiempo_mora_dias, -1) = COALESCE(dr.tiempo_mora_dias, -1)
+                        INNER JOIN `dwh-bdb.bdb_dwh.dim_fecha` AS df
+                          ON DATE(st.fecha_hora) = df.fecha
+                      ) AS source
+                      ON target.id_transaccion = source.id_transaccion
+                      WHEN MATCHED THEN
+                        UPDATE SET
+                          id_cliente = source.id_cliente,
+                          id_producto = source.id_producto,
+                          id_fecha = source.id_fecha,
+                          id_riesgo = source.id_riesgo,
+                          numero_cuenta = source.numero_cuenta,
+                          fecha_hora = source.fecha_hora,
+                          monto_transaccion = source.monto_transaccion,
+                          tipo_transaccion = source.tipo_transaccion
+                      WHEN NOT MATCHED THEN
+                        INSERT (
+                          id_transaccion,
+                          id_cliente,
+                          id_producto,
+                          id_fecha,
+                          id_riesgo,
+                          numero_cuenta,
+                          fecha_hora,
+                          monto_transaccion,
+                          tipo_transaccion
+                        )
+                        VALUES (
+                          source.id_transaccion,
+                          source.id_cliente,
+                          source.id_producto,
+                          source.id_fecha,
+                          source.id_riesgo,
+                          source.numero_cuenta,
+                          source.fecha_hora,
+                          source.monto_transaccion,
+                          source.tipo_transaccion
+                        );
 
                       SELECT
-                        (SELECT COUNT(*)
-                         FROM `dwh-bdb.bdb_dwh.dim_cliente`) AS clientes,
-                        (SELECT COUNT(*)
-                         FROM `dwh-bdb.bdb_dwh.dim_producto`) AS productos,
-                        (SELECT COUNT(*)
-                         FROM `dwh-bdb.bdb_dwh.dim_riesgo`) AS riesgos,
-                        (SELECT COUNT(*)
-                         FROM `dwh-bdb.bdb_dwh.dim_fecha`) AS fechas,
-                        (SELECT COUNT(*)
-                         FROM `dwh-bdb.bdb_dwh.fact_transacciones`) AS transacciones;
+                        (SELECT COUNT(*) FROM `dwh-bdb.bdb_dwh.dim_cliente`) AS clientes,
+                        (SELECT COUNT(*) FROM `dwh-bdb.bdb_dwh.dim_producto`) AS productos,
+                        (SELECT COUNT(*) FROM `dwh-bdb.bdb_dwh.dim_riesgo`) AS riesgos,
+                        (SELECT COUNT(*) FROM `dwh-bdb.bdb_dwh.dim_fecha`) AS fechas,
+                        (SELECT COUNT(*) FROM `dwh-bdb.bdb_dwh.fact_transacciones`) AS transacciones;
 
                     useLegacySql: false
                 result: dwh_job
@@ -702,7 +790,7 @@ main:
                         ),
                         rows_processed = (
                           SELECT COUNT(*)
-                          FROM `dwh-bdb.bdb_dwh.fact_transacciones`
+                          FROM `dwh-bdb.bdb_dwh.stg_transactions_clean`
                         ),
                         rows_rejected = 0,
                         status = 'SUCCESS',
